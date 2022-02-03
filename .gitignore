@@ -1,0 +1,9 @@
+article/
+data/*
+data-raw/*
+documents/*
+results/*
+sessions/*
+heures_695.csv
+!*/.keep
+TODO.txt
