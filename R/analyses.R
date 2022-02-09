@@ -1,7 +1,16 @@
+library(broom.mixed)
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(ggeffects)
 library(ggplot2)
+library(ggpubr)
 library(parallel)
 library(readxl)
 library(scales)
+library(sjPlot)
+library(survival)
+library(survminer)
 library(writexl)
 
 options(mc.cores = detectCores() - 1) 
@@ -16,14 +25,16 @@ if (!dir.exists(outdir)) dir.create(outdir)
 # ------------------- Data importation and preprocessing -------------------- #
 
 # Import data
-fileName <- "data-raw/Final_data_for_statistical_analyses_24.01.2022.xlsx"
+fileName <- "data-raw/Final_data_for_statistical_analyses_08.02.2022.xlsx"
 dta <- read_xlsx(fileName, sheet = "data")
 
 # Remove columns which contain the units
 dta <- dta[!sapply(names(dta), grepl, pattern = " unit$")]
 
 # Unused variables (`HPP is true` == HPP)
-dta <- dta[!(names(dta) %in% c("HPP is true", "Date BS", "HPP symptoms"))]
+with(dta, table(`HPP is true`, HPP, useNA = "ifany"))
+dta$HPP[is.na(dta$HPP)] <- 0
+dta <- dta[!(names(dta) %in% c("HPP is true", "HPP symptoms"))]
 
 # Rename variables
 names(dta) <- gsub("( |-)", "_", names(dta))
@@ -53,6 +64,15 @@ rm(v, x)
 names(dta)[names(dta) == "Gender"] <- "Male"
 dta$Male <- dta$Male == "M"
 
+# Follow-up time
+dta$Date_BS <- as.Date(dta$Date_BS, format = "%d/%m/%Y")
+dta$FU_time <- as.numeric(as.Date("2021-08-07") - dta$Date_BS) / 365.2425
+dta$FU_time <- round(dta$FU_time * 4) / 4
+
+# New variable: HPP_post_nadir
+dta$HPP_post_nadir <- dta$HPP_timepoint > dta$Nadir_timepoint
+with(dta, table(HPP, HPP_post_nadir, useNA = "ifany"))
+
 # -------------------------- Descriptive analyses --------------------------- #
 
 # Descriptive analyses
@@ -70,7 +90,7 @@ descr_tbl <- list(
     Merge <- function(u, v) merge(u, v, by = "grp")
     fcts <- list(N = N, n = sum, p = mean)
     r <- Reduce(Merge, lapply(names(fcts), function(z) {
-      r <- aggregate(x ~ grp, d, fcts[[z]])
+      r <- aggregate(x ~ grp, d, fcts[[z]], drop = FALSE)
       names(r)[2] <- z
       return(r)
     }))
@@ -79,12 +99,14 @@ descr_tbl <- list(
       names(w) <- paste(z, names(w), sep = ".")
       return(w)
     }))
-    if (x %in% c("T2D_po", "HPP")) {
+    v <- names(r)[grep("\\.(N|n)$", names(r))]
+    r[v][is.na(r[v])] <- 0
+    if (x %in% c("T2D_po", "HPP", "HPP_post_nadir")) {
       pv1 <- NA
     } else {
       pv1 <- chisq.test(table(d$x, d$grp))$p.value
     }
-    if (x == "HPP") {
+    if (x %in% c("HPP", "HPP_post_nadir")) {
       pv2 <- NA
     } else {
       pv2 <- fisher.test(table(d$x, d$grp))$p.value
@@ -96,7 +118,7 @@ descr_tbl <- list(
     d <- na.omit(dta[c("HPP", x)])
     u <- d[[x]]
     u0 <- d[!d$HPP, x, drop = TRUE]
-    u1 <- d[d$HPP, x, drop = TRUE] 
+    u1 <- d[d$HPP, x, drop = TRUE]
     if (length(u0) >=1 & length(u1) >= 1) {
       t.test.pval <- t.test(u0, u1)$p.value
       wilcox.test.pval <- wilcox.test(u0, u1, exact = FALSE)$p.value
@@ -160,11 +182,11 @@ for(fig in descr_figs) {
 }
 dev.off()
 
-
 # -------------------------- Logistic regressions --------------------------- #
 
 # Explanatory variables
-X <- names(dta)[!(names(dta) %in% c("Subject_ID", "HPP"))]
+X <- names(dta)
+X <- X[!(X %in% c("Subject_ID", "HPP", "Date_BS", "FU_time"))]
 X <- X[!sapply(X, function(x) all(is.na(dta[!dta$HPP, x])))]
 X <- X[X != "T2D_po"]  # T2D_po -> only one case
 
@@ -230,4 +252,178 @@ for(fig in uv_reg_figs) {
   print(fig)
 }
 dev.off()
+rm(fig)
 
+# Multivariable analyses
+X <- c("weightPO", "BMI_po", "glyc0", "glyc120", "Insul0", "Insul120",
+       "HbA1c", "HOMA_IR", "HOMA_B", "Matsuda", "Age_BS")
+X <- list(X, c(X, "FMTotpc", "FMTissAndpc", "FMI", "VAT", "RAG"))
+names(X) <- paste0("with", c("out", ""), "_DXA")
+mv_reg_tbl <- mclapply(X, function(x) {
+  fml <- as.formula(paste("HPP ~", paste(x, collapse = " + ")))
+  fit1 <- glm(fml, family = binomial, data = na.omit(dta[c("HPP", x)]))
+  fit2 <- stats::step(fit1, trace = FALSE)
+  fit3 <- glm(formula(fit2), family = binomial, data = dta)
+  or <- exp(cbind(odds.ratio = coef(fit3), suppressMessages(confint(fit3))))
+  or <- cbind(or, p.value = coef(summary(fit3))[, 4])
+  z <- data.frame(n = c(nrow(fit3$model), rep(NA, nrow(or) - 1)),
+                  coef_name = rownames(or))
+  rownames(or) <- NULL
+  cbind(z, or)
+})
+names(mv_reg_tbl) <- c("model1", "model2")
+write_xlsx(mv_reg_tbl, file.path(outdir, "multivariable_regressions.xlsx"))
+rm(X)
+
+# ------------------------------ HPP incidence ------------------------------ #
+
+# Survival analysis
+dta$HPP_survtime <- with(dta, ifelse(HPP, HPP_timepoint, FU_time))
+HPP_surv_fit <- survfit(Surv(HPP_survtime, HPP) ~ 1, data = dta)
+
+# Cumulative incidence table
+HPP_surv_tbl <- c("time", "n.risk", "n.event", "surv", "lower", "upper") %>%
+ sapply(function(z) HPP_surv_fit[[z]]) %>%
+ as_tibble() %>%
+ mutate(time_inc = time - lag(time, default = 0),
+        incidence.rate = cumsum(n.event) / cumsum(n.risk * time_inc),
+        cumulative.incidence = 1 - surv,
+        lower = 1 - upper, lower = 1 - upper) %>%
+ select(time, n.risk, n.event, cumulative.incidence, lower, upper,
+        incidence.rate)
+write_xlsx(HPP_surv_tbl, file.path(outdir, "HPP_incidence.xlsx"))
+
+# Cumulative incidence figure
+HPP_surv_fig <- ggsurvplot(fit = HPP_surv_fit, fun = "event",
+                           xlab = "Years after bariatric surgery",
+                           ylab = "Cumulative incidence", legend = "none")
+tiff(filename = file.path(outdir, "HPP_incidence.tiff"),
+     height = 3600, width = 5400, res = 1024, compression = "zip")
+print(HPP_surv_fig)
+dev.off()
+
+# HPP events
+HPP_events_fig <- dta %>%
+  mutate(HPP = factor(HPP, c(FALSE, TRUE), c("NoHPP", "HPP")),
+         Subject_ID = factor(Subject_ID, Subject_ID[order(HPP_survtime)])) %>%
+  ggplot(aes(Subject_ID, HPP_survtime)) + 
+  geom_bar(stat = "identity", width = 0.2) + 
+  geom_point(aes(color = HPP, shape = HPP)) +
+  coord_flip() +
+  scale_color_manual(values = c("#5e81ac", "#bf616a")) +
+  theme_minimal() + 
+  theme(legend.title = element_blank(),
+        legend.position = "bottom",
+        axis.text.y = element_text(size = 6)) +
+  labs(y = "Years after bariatric surgery")
+tiff(filename = file.path(outdir, "HPP_events.tiff"), height = 5400,
+     width = 8100, res = 256, compression = "zip")
+print(HPP_events_fig)
+dev.off()
+
+# ---------------------------- EBMIL post Nadir ----------------------------- #
+
+# Longitudinal data
+v <- grep("EBMIL_", names(dta), value = TRUE)
+lg <- reshape(as.data.frame(dta[c("Subject_ID", v)]), varying = v,
+              v.names = "EBMIL", timevar = "Time", idvar = "Subject_ID",
+              times = sub("EBMIL_", "", v), direction = "long")
+lg <- lg[!is.na(lg$EBMIL), ]
+v <- c("Subject_ID", "HPP", "HPP_timepoint", "Nadir_timepoint",
+       "BMI_po", "BMI_nadir", "Age_BS", "Male")
+lg <- merge(lg, dta[v], by = "Subject_ID")
+lg$Time0 <- lg$Time
+lg$Time <- as.numeric(ifelse(lg$Time == "HPP", lg$HPP_timepoint, ifelse(
+  lg$Time == "nadir", lg$Nadir_timepoint, sub("Y", "", lg$Time))))
+lg$Time_post_nadir <- lg$Time - lg$Nadir_timepoint
+lg$HPP_time_post_nadir <- lg$HPP_timepoint - lg$Nadir_timepoint
+lg$HPP[lg$HPP & lg$Time_post_nadir < lg$HPP_time_post_nadir] <- FALSE
+lg <- lg[lg$Time_post_nadir >= 0, ]
+lg$HPP <- factor(lg$HPP, c(FALSE, TRUE), c("NoHPP", "HPP"))
+lg$Male <- factor(lg$Male, c(FALSE, TRUE), c("Female", "Male"))
+rm(v)
+
+# Regressions
+K <- c(without_covariables = 1, with_covariables = 2)
+ebmil_reg <- mclapply(K, function(k) {
+  fml <- EBMIL ~ HPP * Time_post_nadir
+  fml <- list(fml, update(fml, . ~ . + BMI_po + BMI_nadir + Age_BS + Male))
+  fml <- lapply(fml, function(z) update(z, . ~ . + (1 | Subject_ID)))[[k]]
+  fit <- lmer(fml, data = lg)
+  summary(fit)
+  tbl <- tidy(fit, conf.int = TRUE) %>%
+    select(term, estimate, std.error, conf.low, conf.high, p.value) %>%
+    mutate(
+      term = sub("HPPHPP", "HPP", term),
+      term = sub("MaleMale", "Male", term),
+      term = sub(":", " x ", term),
+      term = sub("sd__", "SD ", term),
+    )
+  sttl <- paste(c("Without", "With")[k], "covariables")
+  figs <- list()
+  dgp <- plot_model(fit, type = "diag")
+  dgp[[2]] <- dgp[[2]]$Subject_ID
+  figs$diag <- ggarrange(plotlist = dgp, nrow = 2, ncol = 2) %>%
+    annotate_figure(top = text_grob(paste0("Diagnostic plots\n", sttl),
+                                    face = "bold", size = 16)) %>%
+    suppressMessages()
+  figs$pred1 <- augment(fit) %>%
+    group_by(Subject_ID) %>%
+    filter(n() > 1) %>%
+    ggplot(aes(Time_post_nadir, EBMIL)) +
+    geom_point(aes(colour = HPP)) +
+    scale_color_manual(values = c("#5e81ac", "#bf616a")) +
+    geom_line(aes(y = .fitted)) +
+    facet_wrap(~ Subject_ID) +
+    labs(title = "Individual predictions", subtitle = sttl) +
+    theme(legend.position = "bottom", legend.title = element_blank())
+  figs$pred2  <- ggpredict(fit, c("Time_post_nadir", "HPP")) %>%
+    as_tibble() %>%
+    select(x, predicted, conf.low, conf.high, group) %>%
+    ggplot(aes(x = x, y = predicted)) +
+    geom_line(aes(colour = group)) +
+    scale_color_manual(values = c("#5e81ac", "#bf616a")) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group),
+                alpha = 0.3, show.legend = FALSE) +
+    labs(x = "Time_post_nadir", y = "EBMIL",
+         title = "Fixed effects predictions", subtitle = sttl) +
+    theme(legend.position = "bottom", legend.title = element_blank())
+  list(fit = fit, tbl = tbl, figs = figs)
+})
+rm(K)
+
+# Any singular fit ?
+b <- sapply(ebmil_reg, function(r) isSingular(r$fit))
+if (any(unlist(b))) warning("Singular fit")
+rm(b)
+
+# Export coefficient tables
+write_xlsx(lapply(ebmil_reg, function(r) r$tbl),
+           file.path(outdir, "EBMIL_regression_coefficients.xlsx"))
+
+# Export results - Figures
+o <- file.path(outdir, "EBMIL_regression_figures")
+if (!dir.exists(o)) dir.create(o)
+for (k in 1:2) {
+  s <- c("nocov", "cov")[k]
+  tiff(filename = file.path(o, paste0("diagnostic_plots_", s, ".tiff")),
+       height = 3600, width = 5400, res = 384, compression = "zip")
+  print(ebmil_reg[[k]]$figs$diag)
+  dev.off()
+  tiff(filename = file.path(o, paste0("individual_predictions_", s, ".tiff")),
+       height = 3600, width = 5400, res = 512, compression = "zip")
+  print(ebmil_reg[[k]]$figs$pred1)
+  dev.off()
+  tiff(
+    filename = file.path(o, paste0("fixed_effects_predictions_", s, ".tiff")),
+    height = 3600, width = 5400, res = 1024, compression = "zip")
+  print(ebmil_reg[[k]]$figs$pred2)
+  dev.off()
+}
+rm(k, o, s)
+
+# ------------------------------ Session info ------------------------------- #
+
+sink(file.path(outdir, "sessionInfo.txt"))
+print(sessionInfo(), locale = FALSE)
+sink()
