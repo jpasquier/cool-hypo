@@ -256,7 +256,8 @@ rm(fig)
 
 # Multivariable analyses
 X <- c("weightPO", "BMI_po", "glyc0", "glyc120", "Insul0", "Insul120",
-       "HbA1c", "HOMA_IR", "HOMA_B", "Matsuda", "Age_BS")
+       "HbA1c", "HOMA_IR", "HOMA_B", "Matsuda", "Age_BS", "Male", "HTApo",
+       "DyslipidemiaPO", "HyperuricemiePO", "HMG", "Steatose")
 X <- list(X, c(X, "FMTotpc", "FMTissAndpc", "FMI", "VAT", "RAG"))
 names(X) <- paste0("with", c("out", ""), "_DXA")
 mv_reg_tbl <- mclapply(X, function(x) {
@@ -411,7 +412,7 @@ for (k in 1:2) {
   print(ebmil_reg[[k]]$figs$diag)
   dev.off()
   tiff(filename = file.path(o, paste0("individual_predictions_", s, ".tiff")),
-       height = 3600, width = 5400, res = 512, compression = "zip")
+       height = 7200, width = 10800, res = 512, compression = "zip")
   print(ebmil_reg[[k]]$figs$pred1)
   dev.off()
   tiff(
