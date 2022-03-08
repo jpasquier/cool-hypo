@@ -11,6 +11,7 @@ library(scales)
 library(sjPlot)
 library(survival)
 library(survminer)
+library(svglite)
 library(writexl)
 
 options(mc.cores = detectCores() - 1) 
@@ -202,7 +203,8 @@ uv_reg_tbl <- do.call(rbind, lapply(X, function(x) {
 write_xlsx(uv_reg_tbl, file.path(outdir, "univariable_regressions.xlsx"))
 
 # Univariable regression - Graphical summary
-d <- t(sapply(setNames(X, X), function(u) {
+X2 <- X[!grepl("(weight|BMI|EBMIL|TWL)_[1-6]Y$", X)]
+d <- t(sapply(setNames(X2, X2), function(u) {
   y <- dta$HPP
   x <- dta[[u]]
   if (!is.logical(x)) x <- x / sd(x, na.rm = TRUE)
@@ -210,7 +212,7 @@ d <- t(sapply(setNames(X, X), function(u) {
   exp(cbind(or = coef(fit), suppressMessages(confint(fit))))[-1, ]
 }))
 d <- cbind(data.frame(x = rownames(d)), d)
-d$x <- factor(d$x, rev(X))
+d$x <- factor(d$x, rev(X2))
 uv_reg_fig <- ggplot(data = d, aes(x = or, y = x)) +
     geom_point() +
     geom_errorbarh(aes(xmin = `2.5 %`, xmax = `97.5 %`), height = 0.6) +
@@ -218,12 +220,18 @@ uv_reg_fig <- ggplot(data = d, aes(x = or, y = x)) +
                   labels = trans_format("log10", math_format(10^.x))) +
     geom_vline(xintercept = 1, linetype = "dashed") +
     labs(x = "Odds ratio", y = "", title = "Odds ratios graphical summary",
-         subtitle = "Standardized explanatory variables")
+         subtitle = "Standardized explanatory variables") +
+    theme_bw()
 tiff(file.path(outdir, "univariable_regressions.tiff"),  width = 4800,
      height = 4800, res = 600, compression = "zip")
 print(uv_reg_fig)
 dev.off()
+svglite(file.path(outdir, "univariable_regressions.svg"),  width = 8,
+        height = 8)
+print(uv_reg_fig)
+dev.off()
 rm(d)
+rm(X2)
 
 # Univariable regression - Figures of predicted values
 uv_reg_figs <- mclapply(X, function(x) {
@@ -255,12 +263,12 @@ dev.off()
 rm(fig)
 
 # Multivariable analyses
-X <- c("weightPO", "BMI_po", "glyc0", "glyc120", "Insul0", "Insul120",
-       "HbA1c", "HOMA_IR", "HOMA_B", "Matsuda", "Age_BS", "Male", "HTApo",
-       "DyslipidemiaPO", "HyperuricemiePO", "HMG", "Steatose")
-X <- list(X, c(X, "FMTotpc", "FMTissAndpc", "FMI", "VAT", "RAG"))
-names(X) <- paste0("with", c("out", ""), "_DXA")
-mv_reg_tbl <- mclapply(X, function(x) {
+X3 <- c("weightPO", "BMI_po", "glyc0", "glyc120", "Insul0", "Insul120",
+        "HbA1c", "HOMA_IR", "HOMA_B", "Matsuda", "Age_BS", "Male", "HTApo",
+        "DyslipidemiaPO", "HyperuricemiePO", "HMG", "Steatose")
+X3 <- list(X3, c(X3, "FMTotpc", "FMTissAndpc", "FMI", "VAT", "RAG"))
+names(X3) <- paste0("with", c("out", ""), "_DXA")
+mv_reg_tbl <- mclapply(X3, function(x) {
   fml <- as.formula(paste("HPP ~", paste(x, collapse = " + ")))
   fit1 <- glm(fml, family = binomial, data = na.omit(dta[c("HPP", x)]))
   fit2 <- stats::step(fit1, trace = FALSE)
@@ -274,7 +282,7 @@ mv_reg_tbl <- mclapply(X, function(x) {
 })
 names(mv_reg_tbl) <- c("model1", "model2")
 write_xlsx(mv_reg_tbl, file.path(outdir, "multivariable_regressions.xlsx"))
-rm(X)
+rm(X3)
 
 # ------------------------------ HPP incidence ------------------------------ #
 
@@ -371,24 +379,28 @@ ebmil_reg <- mclapply(K, function(k) {
   figs$pred1 <- augment(fit) %>%
     group_by(Subject_ID) %>%
     filter(n() > 1) %>%
+    mutate(PHH = factor(HPP, c("NoHPP", "HPP"), c("No", "Yes"))) %>%
     ggplot(aes(Time_post_nadir, EBMIL)) +
-    geom_point(aes(colour = HPP)) +
+    geom_point(aes(colour = PHH)) +
     scale_color_manual(values = c("#5e81ac", "#bf616a")) +
     geom_line(aes(y = .fitted)) +
     facet_wrap(~ Subject_ID) +
     labs(title = "Individual predictions", subtitle = sttl) +
-    theme(legend.position = "bottom", legend.title = element_blank())
+    theme_bw() +
+    theme(legend.position = "bottom")
   figs$pred2  <- ggpredict(fit, c("Time_post_nadir", "HPP")) %>%
     as_tibble() %>%
     select(x, predicted, conf.low, conf.high, group) %>%
+    mutate(PHH = factor(group, c("NoHPP", "HPP"), c("No", "Yes"))) %>%
     ggplot(aes(x = x, y = predicted)) +
-    geom_line(aes(colour = group)) +
+    geom_line(aes(colour = PHH)) +
     scale_color_manual(values = c("#5e81ac", "#bf616a")) +
     geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group),
                 alpha = 0.3, show.legend = FALSE) +
     labs(x = "Time_post_nadir", y = "EBMIL",
          title = "Fixed effects predictions", subtitle = sttl) +
-    theme(legend.position = "bottom", legend.title = element_blank())
+    theme_bw() +
+    theme(legend.position = "bottom")
   list(fit = fit, tbl = tbl, figs = figs)
 })
 rm(K)
@@ -418,6 +430,11 @@ for (k in 1:2) {
   tiff(
     filename = file.path(o, paste0("fixed_effects_predictions_", s, ".tiff")),
     height = 3600, width = 5400, res = 1024, compression = "zip")
+  print(ebmil_reg[[k]]$figs$pred2)
+  dev.off()
+  svglite(
+    filename = file.path(o, paste0("fixed_effects_predictions_", s, ".svg")),
+    height = 3600 / 1024, width = 5400 / 1024)
   print(ebmil_reg[[k]]$figs$pred2)
   dev.off()
 }
