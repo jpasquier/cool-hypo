@@ -213,23 +213,29 @@ d <- t(sapply(setNames(X2, X2), function(u) {
 }))
 d <- cbind(data.frame(x = rownames(d)), d)
 d$x <- factor(d$x, rev(X2))
-uv_reg_fig <- ggplot(data = d, aes(x = or, y = x)) +
+uv_reg_fig <- list()
+uv_reg_fig[[1]] <- ggplot(data = d, aes(x = or, y = x)) +
     geom_point() +
     geom_errorbarh(aes(xmin = `2.5 %`, xmax = `97.5 %`), height = 0.6) +
-    scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
-                  labels = trans_format("log10", math_format(10^.x))) +
     geom_vline(xintercept = 1, linetype = "dashed") +
     labs(x = "Odds ratio", y = "", title = "Odds ratios graphical summary",
          subtitle = "Standardized explanatory variables") +
     theme_bw()
-tiff(file.path(outdir, "univariable_regressions.tiff"),  width = 4800,
-     height = 4800, res = 600, compression = "zip")
-print(uv_reg_fig)
-dev.off()
-svglite(file.path(outdir, "univariable_regressions.svg"),  width = 8,
-        height = 8)
-print(uv_reg_fig)
-dev.off()
+uv_reg_fig[[2]] <- uv_reg_fig[[1]] +
+    scale_x_log10(breaks = c(0.4, 0.6, 1, 1.6, 2.5, 4, 6.3))
+uv_reg_fig[[3]] <- uv_reg_fig[[1]] +
+    scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                  labels = trans_format("log10", math_format(10^.x)))
+for (k in 1:3) {
+  tiff(file.path(outdir, paste0("univariable_regressions_", k, ".tiff")),
+                 width = 4800, height = 4800, res = 600, compression = "zip")
+  print(uv_reg_fig[[k]])
+  dev.off()
+  svglite(file.path(outdir, paste0("univariable_regressions_", k, ".svg")),
+          width = 8, height = 8)
+  print(uv_reg_fig[[k]])
+  dev.off()
+}
 rm(d)
 rm(X2)
 
