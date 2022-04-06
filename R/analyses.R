@@ -21,6 +21,7 @@ setwd("~/Projects/Consultations/Favre Lucie (COOL-HYPO)")
 
 # Output directory
 outdir <- paste0("results/analyses_", format(Sys.Date(), "%Y%m%d"))
+outdir <- "results/analyses_dev"
 if (!dir.exists(outdir)) dir.create(outdir)
 
 # ------------------- Data importation and preprocessing -------------------- #
@@ -204,6 +205,7 @@ write_xlsx(uv_reg_tbl, file.path(outdir, "univariable_regressions.xlsx"))
 
 # Univariable regression - Graphical summary
 X2 <- X[!grepl("(weight|BMI|EBMIL|TWL)_[1-6]Y$", X)]
+X2 <- X2[!grepl("(N|n)adir", X2)]
 d <- t(sapply(setNames(X2, X2), function(u) {
   y <- dta$HPP
   x <- dta[[u]]
@@ -212,7 +214,8 @@ d <- t(sapply(setNames(X2, X2), function(u) {
   exp(cbind(or = coef(fit), suppressMessages(confint(fit))))[-1, ]
 }))
 d <- cbind(data.frame(x = rownames(d)), d)
-d$x <- factor(d$x, rev(X2))
+d$x[d$x == "Dumping_precoce_1Y"] <- "Early_dumping_syndrome"
+d$x <- factor(d$x, rev(d$x))
 uv_reg_fig <- list()
 uv_reg_fig[[1]] <- ggplot(data = d, aes(x = or, y = x)) +
     geom_point() +
