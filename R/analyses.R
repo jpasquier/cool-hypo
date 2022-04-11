@@ -311,6 +311,21 @@ HPP_surv_tbl <- c("time", "n.risk", "n.event", "surv", "lower", "upper") %>%
         incidence.rate)
 write_xlsx(HPP_surv_tbl, file.path(outdir, "HPP_incidence.xlsx"))
 
+# Check that the incidence rate is approximately constant
+HPP_surv_fit %>%
+  {tibble(time = .$time, surv = .$surv)} %>%
+  filter(time <= 5) %>%
+  ggplot(aes(x = time, y = log(surv))) +
+  geom_point() +
+  geom_smooth(method = lm, formula = y ~ x, se = FALSE)
+sapply(HPP_surv_fit$time, function(u) {
+  HPP_surv_fit %>%
+    {tibble(time = .$time, surv = .$surv)} %>%
+    filter(time <= u) %>%
+    lm(surv ~ time, data = .) %>%
+    {-coef(.)[[2]]}
+})
+
 # Cumulative incidence figure
 HPP_surv_fig <- ggsurvplot(fit = HPP_surv_fit, fun = "event",
                            xlab = "Years after bariatric surgery",
