@@ -21,7 +21,7 @@ setwd("~/Projects/Consultations/Favre Lucie (COOL-HYPO)")
 
 # Output directory
 outdir <- paste0("results/analyses_", format(Sys.Date(), "%Y%m%d"))
-outdir <- "results/analyses_dev"
+#outdir <- "results/analyses_dev"
 if (!dir.exists(outdir)) dir.create(outdir)
 
 # ------------------- Data importation and preprocessing -------------------- #
@@ -214,33 +214,25 @@ d <- t(sapply(setNames(X2, X2), function(u) {
   exp(cbind(or = coef(fit), suppressMessages(confint(fit))))[-1, ]
 }))
 d <- cbind(data.frame(x = rownames(d)), d)
-d$x[d$x == "Dumping_precoce_1Y"] <- "Early_dumping_syndrome"
+d$x <- sub("_?(BS|pc|po|PO)$", "", d$x)
+d$x[d$x == "Dumping_precoce_1Y"] <- "Early dumping syndrome"
 d$x <- factor(d$x, rev(d$x))
-uv_reg_fig <- list()
-uv_reg_fig[[1]] <- ggplot(data = d, aes(x = or, y = x)) +
+uv_reg_fig <- ggplot(data = d, aes(x = or, y = x)) +
     geom_point() +
     geom_errorbarh(aes(xmin = `2.5 %`, xmax = `97.5 %`), height = 0.6) +
     geom_vline(xintercept = 1, linetype = "dashed") +
-    labs(x = "Odds ratio", y = "", title = "Odds ratios graphical summary",
-         subtitle = "Standardized explanatory variables") +
+    scale_x_log10(breaks = c(0.4, 0.6, 1, 1.6, 2.5, 4, 6.3)) +
+    labs(x = "Odds ratio", y = "") +
     theme_bw()
-uv_reg_fig[[2]] <- uv_reg_fig[[1]] +
-    scale_x_log10(breaks = c(0.4, 0.6, 1, 1.6, 2.5, 4, 6.3))
-uv_reg_fig[[3]] <- uv_reg_fig[[1]] +
-    scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
-                  labels = trans_format("log10", math_format(10^.x)))
-for (k in 1:3) {
-  tiff(file.path(outdir, paste0("univariable_regressions_", k, ".tiff")),
-                 width = 4800, height = 4800, res = 600, compression = "zip")
-  print(uv_reg_fig[[k]])
-  dev.off()
-  svglite(file.path(outdir, paste0("univariable_regressions_", k, ".svg")),
-          width = 8, height = 8)
-  print(uv_reg_fig[[k]])
-  dev.off()
-}
-rm(d)
-rm(X2)
+tiff(file.path(outdir, "fig2_univariable_regressions.tiff"), width = 4800,
+     height = 4800, res = 600, compression = "zip")
+print(uv_reg_fig)
+dev.off()
+svglite(file.path(outdir, "fig2_univariable_regressions.svg"), width = 8,
+        height = 8)
+print(uv_reg_fig)
+dev.off()
+rm(X2, d)
 
 # Univariable regression - Figures of predicted values
 uv_reg_figs <- mclapply(X, function(x) {
@@ -418,11 +410,11 @@ ebmil_reg <- mclapply(K, function(k) {
     mutate(PHH = factor(group, c("NoHPP", "HPP"), c("No", "Yes"))) %>%
     ggplot(aes(x = x, y = predicted)) +
     geom_line(aes(colour = PHH)) +
-    scale_color_manual(values = c("#5e81ac", "#bf616a")) +
-    geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group),
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = PHH),
                 alpha = 0.3, show.legend = FALSE) +
-    labs(x = "Time_post_nadir", y = "EBMIL",
-         title = "Fixed effects predictions", subtitle = sttl) +
+    scale_color_manual(values = c("#5e81ac", "#bf616a")) +
+    scale_fill_manual(values = c("#5e81ac", "#bf616a")) +
+    labs(x = "Time post nadir (years)", y = "% EBMIL") +
     theme_bw() +
     theme(legend.position = "bottom")
   list(fit = fit, tbl = tbl, figs = figs)
@@ -442,6 +434,7 @@ write_xlsx(lapply(ebmil_reg, function(r) r$tbl),
 o <- file.path(outdir, "EBMIL_regression_figures")
 if (!dir.exists(o)) dir.create(o)
 for (k in 1:2) {
+  p <- c("fig3", "fig4")[k]
   s <- c("nocov", "cov")[k]
   tiff(filename = file.path(o, paste0("diagnostic_plots_", s, ".tiff")),
        height = 3600, width = 5400, res = 384, compression = "zip")
@@ -451,14 +444,14 @@ for (k in 1:2) {
        height = 7200, width = 10800, res = 512, compression = "zip")
   print(ebmil_reg[[k]]$figs$pred1)
   dev.off()
-  tiff(
-    filename = file.path(o, paste0("fixed_effects_predictions_", s, ".tiff")),
-    height = 3600, width = 5400, res = 1024, compression = "zip")
+  tiff(filename = file.path(o, paste0(p, "_fixed_effects_predictions_",
+                                      s, ".tiff")),
+       height = 3600, width = 5400, res = 1024, compression = "zip")
   print(ebmil_reg[[k]]$figs$pred2)
   dev.off()
-  svglite(
-    filename = file.path(o, paste0("fixed_effects_predictions_", s, ".svg")),
-    height = 3600 / 1024, width = 5400 / 1024)
+  svglite(filename = file.path(o, paste0(p, "_fixed_effects_predictions_",
+                                         s, ".svg")),
+          height = 3600 / 1024, width = 5400 / 1024)
   print(ebmil_reg[[k]]$figs$pred2)
   dev.off()
 }
